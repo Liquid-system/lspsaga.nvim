@@ -16,6 +16,7 @@ local function get_colors()
     white = '#d1d4cf',
     black = '#1c1c19',
     gray = '#6e6b6b',
+    fg = '#f2f2bf',
   }
   if not resolved then
     for k, v in pairs(ui.colors) do
@@ -37,7 +38,7 @@ local function hi_define()
     TitleIcon = { bg = colors.title_bg, fg = colors.red },
     SagaBorder = { bg = colors.normal_bg },
     SagaExpand = { fg = colors.red },
-    SagaCollaspe = { fg = colors.red },
+    SagaCollapse = { fg = colors.red },
     SagaBeacon = { bg = colors.magenta },
     -- code action
     ActionPreviewNormal = { link = 'SagaBorder' },
@@ -81,6 +82,7 @@ local function hi_define()
     DiagnosticHintBorder = { link = 'SagaBorder' },
     DiagnosticInfoBorder = { link = 'SagaBorder' },
     DiagnosticPos = { fg = colors.gray },
+    DiagnosticWord = { fg = colors.fg },
     -- Call Hierachry
     CallHierarchyNormal = { link = 'SagaBorder' },
     CallHierarchyBorder = { link = 'SagaBorder' },

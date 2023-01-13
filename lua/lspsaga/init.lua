@@ -8,7 +8,7 @@ local default_config = {
     border = 'solid',
     winblend = 0,
     expand = '',
-    collaspe = '',
+    collapse = '',
     preview = ' ',
     code_action = '💡',
     diagnostic = '🐞',
@@ -29,6 +29,7 @@ local default_config = {
     keys = {
       exec_action = 'o',
       quit = 'q',
+      go_action = 'g',
     },
   },
   code_action = {
@@ -93,7 +94,7 @@ local default_config = {
     custom_sort = nil,
     keys = {
       jump = 'o',
-      expand_collaspe = 'u',
+      expand_collapse = 'u',
       quit = 'q',
     },
   },
@@ -106,7 +107,7 @@ local default_config = {
       tabe = 't',
       jump = 'o',
       quit = 'q',
-      expand_collaspe = 'u',
+      expand_collapse = 'u',
     },
   },
   server_filetype_map = {},
@@ -139,7 +140,7 @@ end
 ---@deprecated
 function saga.init_lsp_saga()
   vim.notify(
-    'lspsaga.nvim version 0.2.3 is breakchange please read doc and use setup function!',
+    'lspsaga.nvim v0.2.3+ has braking changes. Please read the docs and migrate your configuration to the new "setup" function!',
     vim.log.levels.ERROR
   )
 end

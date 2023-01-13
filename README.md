@@ -121,7 +121,7 @@ keymap("n", "<Leader>ci", "<cmd>Lspsaga incoming_calls<CR>")
 keymap("n", "<Leader>co", "<cmd>Lspsaga outgoing_calls<CR>")
 
 -- Float terminal
-keymap({"n", "t"} "<A-d>", "<cmd>Lspsaga term_toggle<CR>")
+keymap({"n", "t"}, "<A-d>", "<cmd>Lspsaga term_toggle<CR>")
 ```
 
 ## Usage Tutorial
@@ -168,7 +168,7 @@ src="https://user-images.githubusercontent.com/41671631/212032702-f45bba5a-3e2e-
 
 ## :Lspsaga peek_definition
 
-there has two commands `Lspsaga peek_defintion` and `Lspsaga goto_defintion`, the `peek_defitnion` work like vscode that show the target file in a floatwindow you can edit as normalize.
+there has two commands `Lspsaga peek_definition` and `Lspsaga goto_definition`, the `peek_definition` work like vscode that show the target file in a floatwindow you can edit as normalize.
 
 options with default value
 
@@ -271,10 +271,13 @@ jump to next diagnsotic position then show beacon and show the codeaction. defau
     keys = {
       exec_action = 'o',
       quit = 'q',
+      go_action = 'g'
     },
   },
 ```
 if `twice_into` set to `true`, press twice the diagnostic jump shortcut it will jump into the floatwindow. other way is use `wincmd` to jump into use `<C-w>w`.
+
+`go_action` can quickly jump to action line in diagnostic floatwindow
 
 also you can use a filter in diagnostic jump by using lspsaga function. function params is a table
 same as `:h vim.diagnsotic.get_next`
@@ -343,7 +346,7 @@ default options
     custom_sort = nil,
     keys = {
       jump = 'o',
-      expand_collaspe = 'u',
+      expand_collapse = 'u',
       quit = 'q',
     },
   },
@@ -373,7 +376,7 @@ run lsp callhierarchy incoming_calls.  default options
       tabe = 't',
       jump = 'o',
       quit = 'q',
-      expand_collaspe = 'u',
+      expand_collapse = 'u',
     },
   },
 ```
@@ -445,7 +448,7 @@ default ui options
     border = 'solid',
     winblend = 0,
     expand = '',
-    collaspe = '',
+    collapse = '',
     preview = ' ',
     code_action = '💡',
     diagnostic = '🐞',

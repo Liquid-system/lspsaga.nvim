@@ -167,8 +167,8 @@ function ot:apply_map()
     clean_ctx()
   end, opt)
 
-  keymap.set('n', maps.expand_collaspe, function()
-    self:expand_collaspe()
+  keymap.set('n', maps.expand_collapse, function()
+    self:expand_collapse()
   end, opt)
 
   keymap.set('n', maps.jump, function()
@@ -212,7 +212,7 @@ function ot:request_and_render(buf)
   end, buf)
 end
 
-function ot:expand_collaspe()
+function ot:expand_collapse()
   local curline = api.nvim_win_get_cursor(0)[1]
   local idx, node = find_node(self.data, curline)
   if not node then
@@ -233,13 +233,13 @@ function ot:expand_collaspe()
 
   if node.expand then
     local text = api.nvim_get_current_line()
-    text = text:gsub(config.ui.collaspe, config.ui.expand)
+    text = text:gsub(config.ui.collapse, config.ui.expand)
     for _, v in pairs(node.data) do
       v.winline = -1
     end
     api.nvim_buf_set_lines(self.bufnr, curline - 1, curline + #node.data, false, { text })
     node.expand = false
-    api.nvim_buf_add_highlight(self.bufnr, 0, 'SagaCollaspe', curline - 1, 0, 5)
+    api.nvim_buf_add_highlight(self.bufnr, 0, 'SagaCollapse', curline - 1, 0, 5)
     api.nvim_buf_add_highlight(
       self.bufnr,
       0,
@@ -254,7 +254,7 @@ function ot:expand_collaspe()
 
   local lines = {}
   local text = api.nvim_get_current_line()
-  text = text:gsub(config.ui.expand, config.ui.collaspe)
+  text = text:gsub(config.ui.expand, config.ui.collapse)
   insert(lines, text)
   for i, v in pairs(node.data) do
     insert(lines, v.name)
@@ -284,12 +284,15 @@ function ot:auto_refresh()
   api.nvim_create_autocmd('BufEnter', {
     group = self.group,
     callback = function(opt)
-      local ignore = { 'lspsagaoutline', 'terminal', 'help' }
+      if not api.nvim_buf_is_valid(opt.buf) then
+        return
+      end
+      local ignore = { 'lspsagaoutline', 'terminal', 'help', 'prompt', 'nofile' }
       if vim.tbl_contains(ignore, vim.bo[opt.buf].filetype) or opt.buf == self.render_buf then
         return
       end
 
-      if vim.bo[opt.buf].buftype == 'prompt' then
+      if vim.tbl_contains(ignore, vim.bo[opt.buf].buftype) then
         return
       end
 
@@ -382,10 +385,15 @@ function ot:auto_preview()
 
   local window = require('lspsaga.window')
   self.preview_bufnr, self.preview_winid = window.create_win_with_border(content_opts, opts)
-  -- this is will trigger filetype event
-  -- when 0.9 release use vim.treesitter.start would be better
-  vim.bo[self.preview_bufnr].filetype = vim.bo[self.render_buf].filetype
-  api.nvim_win_set_var(self.preview_winid, 'disable_winbar', true)
+  if fn.has('nvim-0.9') == 1 then
+    local lang = require('nvim-treesitter.parsers').ft_to_lang(vim.bo[self.render_buf].filetype)
+    vim.treesitter.start(self.preview_bufnr, lang)
+  else
+    -- this is will trigger filetype event
+    -- when 0.9 release use vim.treesitter.start would be better
+    vim.bo[self.preview_bufnr].filetype = vim.bo[self.render_buf].filetype
+    api.nvim_win_set_var(self.preview_winid, 'disable_winbar', true)
+  end
   local events = { 'CursorMoved', 'BufLeave' }
   vim.defer_fn(function()
     libs.close_preview_autocmd(self.bufnr, self.preview_winid, events)
@@ -397,12 +405,21 @@ function ot:close_when_last()
     group = self.group,
     callback = function(opt)
       local wins = api.nvim_list_wins()
-      if #wins == 1 and vim.bo[opt.buf].filetype == 'lspsagaoutline' then
-        api.nvim_buf_delete(self.bufnr, { force = true })
-        local bufnr = api.nvim_create_buf(true, true)
-        api.nvim_win_set_buf(0, bufnr)
-        clean_ctx()
+      if #wins > 2 then
+        return
       end
+
+      if #wins == 2 and vim.bo[opt.buf].buftype ~= 'nofile' then
+        return
+      end
+
+      if #wins == 1 and vim.bo[opt.buf].filetype ~= 'lspsagaoutline' then
+        return
+      end
+      api.nvim_buf_delete(self.bufnr, { force = true })
+      local bufnr = api.nvim_create_buf(true, true)
+      api.nvim_win_set_buf(0, bufnr)
+      clean_ctx()
     end,
     desc = 'Outline auto close when last one',
   })
@@ -426,9 +443,9 @@ function ot:render_outline(buf, symbols)
 
   for k, v in pairs(res) do
     local scope = {}
-    local indent_with_icon = '  ' .. config.ui.collaspe
+    local indent_with_icon = '  ' .. config.ui.collapse
     insert(lines, indent_with_icon .. ' ' .. kind[k][1])
-    scope['SagaCollaspe'] = { 0, #indent_with_icon }
+    scope['SagaCollapse'] = { 0, #indent_with_icon }
     scope[prefix .. kind[k][1]] = { #indent_with_icon, -1 }
     insert(hi, scope)
     v.winline = #lines
