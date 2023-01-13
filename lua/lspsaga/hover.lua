@@ -1,4 +1,4 @@
-local api, lsp, util = vim.api, vim.lsp, vim.lsp.util
+local api, fn, lsp, util = vim.api, vim.fn, vim.lsp, vim.lsp.util
 local hover = {}
 
 function hover:open_floating_preview(res, opts)
@@ -29,12 +29,15 @@ function hover:open_floating_preview(res, opts)
     width = max_content_len > max_float_width and max_float_width or max_content_len,
     height = #content + increase,
     no_size_override = true,
-    title = {
+  }
+
+  if fn.has('nvim-0.9') == 1 then
+    float_option.title = {
       { theme.left, 'TitleSymbol' },
       { 'Hover', 'TitleString' },
       { theme.right, 'TitleSymbol' },
-    },
-  }
+    }
+  end
 
   local contents_opt = {
     contents = content,
@@ -52,14 +55,15 @@ function hover:open_floating_preview(res, opts)
   vim.wo[self.preview_winid].conceallevel = 2
   vim.wo[self.preview_winid].concealcursor = 'niv'
   vim.wo[self.preview_winid].showbreak = 'NONE'
-  vim.wo[self.preview_winid].fillchars = 'lastline: '
-  if vim.fn.has('nvim-0.9') then
+  if fn.has('nvim-0.9') == 1 then
+    vim.wo[self.preview_winid].fcs = 'lastline: '
     vim.treesitter.start(self.preview_bufnr, 'markdown')
   end
 
   vim.keymap.set('n', 'q', function()
-    if self.preview_bufnr and api.nvim_buf_is_loaded(self.preview_bufnr) then
-      api.nvim_buf_delete(self.preview_bufnr, { force = true })
+    if self.preview_winid and api.nvim_win_is_valid(self.preview_winid) then
+      api.nvim_win_close(self.preview_winid, true)
+      self:remove_data()
     end
   end, { buffer = self.preview_bufnr })
 
@@ -67,13 +71,13 @@ function hover:open_floating_preview(res, opts)
     buffer = bufnr,
     once = true,
     callback = function()
-      if api.nvim_buf_is_loaded(self.preview_bufnr) then
+      if self.preview_bufnr and api.nvim_buf_is_loaded(self.preview_bufnr) then
         pcall(libs.delete_scroll_map, bufnr)
       end
 
       if self.preview_winid and api.nvim_win_is_valid(self.preview_winid) then
         api.nvim_win_close(self.preview_winid, true)
-        self.preview_winid = nil
+        self:remove_data()
       end
     end,
     desc = '[Lspsaga] Auto close hover window',
@@ -101,6 +105,14 @@ function hover:do_request()
     end
     self:handler(result)
   end)
+end
+
+function hover:remove_data()
+  for k, v in pairs(self) do
+    if type(v) ~= 'function' then
+      self[k] = nil
+    end
+  end
 end
 
 function hover:render_hover_doc()
