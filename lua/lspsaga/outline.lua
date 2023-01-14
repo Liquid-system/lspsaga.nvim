@@ -237,7 +237,9 @@ function ot:expand_collapse()
     for _, v in pairs(node.data) do
       v.winline = -1
     end
+    vim.bo[self.bufnr].modifiable = true
     api.nvim_buf_set_lines(self.bufnr, curline - 1, curline + #node.data, false, { text })
+    vim.bo[self.bufnr].modifiable = false
     node.expand = false
     api.nvim_buf_add_highlight(self.bufnr, 0, 'SagaCollapse', curline - 1, 0, 5)
     api.nvim_buf_add_highlight(
@@ -260,7 +262,9 @@ function ot:expand_collapse()
     insert(lines, v.name)
     v.winline = curline + i
   end
+  vim.bo[self.bufnr].modifiable = true
   api.nvim_buf_set_lines(self.bufnr, curline - 1, curline, false, lines)
+  vim.bo[self.bufnr].modifiable = false
   node.expand = true
   api.nvim_buf_add_highlight(self.bufnr, 0, 'SagaExpand', curline - 1, 0, 5)
   api.nvim_buf_add_highlight(
@@ -305,6 +309,7 @@ function ot:auto_refresh()
         if api.nvim_get_current_buf() ~= opt.buf or not self.bufnr then
           return
         end
+        vim.bo[self.bufnr].modifiable = true
         api.nvim_buf_set_lines(self.bufnr, 0, -1, false, {})
         self:outline(true)
       end, 10)
@@ -403,22 +408,34 @@ end
 function ot:close_when_last()
   api.nvim_create_autocmd('BufEnter', {
     group = self.group,
-    callback = function(opt)
+    callback = function()
       local wins = api.nvim_list_wins()
       if #wins > 2 then
         return
       end
-
-      if #wins == 2 and vim.bo[opt.buf].buftype ~= 'nofile' then
+      local bufs = api.nvim_list_bufs()
+      bufs = vim.tbl_filter(function(b)
+        return fn.buflisted(b) == 0 and #fn.win_findbuf(b) > 0
+      end, bufs)
+      if #bufs == 1 and bufs[1] == self.bufnr and #wins > 1 then
         return
       end
 
-      if #wins == 1 and vim.bo[opt.buf].filetype ~= 'lspsagaoutline' then
-        return
+      local both_nofile = {}
+      for _, buf in pairs(bufs) do
+        if buf ~= self.bufnr and vim.bo[buf].buftype == 'nofile' then
+          table.insert(both_nofile, true)
+        end
       end
-      api.nvim_buf_delete(self.bufnr, { force = true })
-      local bufnr = api.nvim_create_buf(true, true)
-      api.nvim_win_set_buf(0, bufnr)
+
+      if #both_nofile + 1 == #bufs or #wins == 1 then
+        api.nvim_buf_delete(self.bufnr, { force = true })
+      end
+
+      if #wins == 1 then
+        local bufnr = api.nvim_create_buf(true, true)
+        api.nvim_win_set_buf(0, bufnr)
+      end
       clean_ctx()
     end,
     desc = 'Outline auto close when last one',
@@ -464,6 +481,7 @@ function ot:render_outline(buf, symbols)
   end
 
   api.nvim_buf_set_lines(self.bufnr, 0, -1, false, lines)
+  vim.bo[self.bufnr].modifiable = false
   api.nvim_buf_add_highlight(self.bufnr, 0, data[2], 0, 0, 4)
   for k, v in pairs(hi) do
     if not vim.tbl_isempty(v) then
