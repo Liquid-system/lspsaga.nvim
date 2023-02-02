@@ -3,6 +3,7 @@ local api, lsp, fn, keymap = vim.api, vim.lsp, vim.fn, vim.keymap
 local config = require('lspsaga').config
 local libs = require('lspsaga.libs')
 local symbar = require('lspsaga.symbolwinbar')
+local window = require('lspsaga.window')
 local outline_conf = config.outline
 local insert = table.insert
 local ctx = {}
@@ -67,13 +68,13 @@ local function get_hi_prefix()
 end
 
 local function get_kind()
-  return require('lspsaga.highlight').get_kind()
+  return require('lspsaga.lspkind').get_kind()
 end
 
 local function find_node(data, line)
-  for idx, node in pairs(data or {}) do
+  for _, node in pairs(data or {}) do
     if node.winline == line then
-      return idx, node
+      return node
     end
   end
 end
@@ -156,7 +157,7 @@ end
 
 function ot:apply_map()
   local maps = outline_conf.keys
-  local opt = { buffer = true, nowait = true }
+  local opt = { buffer = self.bufnr, nowait = true }
   keymap.set('n', maps.quit, function()
     if self.bufnr and api.nvim_buf_is_loaded(self.bufnr) then
       api.nvim_buf_delete(self.bufnr, { force = true })
@@ -175,21 +176,26 @@ function ot:apply_map()
     local curline = api.nvim_win_get_cursor(0)[1]
     local node
     for _, nodes in pairs(self.data) do
-      _, node = find_node(nodes.data, curline)
+      node = find_node(nodes.data, curline)
       if node then
         break
       end
     end
 
-    if not node or not node.range then
+    if not node then
       return
     end
+    local range = node.range and node.range or node.location.range
 
     local winid = fn.bufwinid(self.render_buf)
     api.nvim_set_current_win(winid)
-    api.nvim_win_set_cursor(winid, { node.pos[1] + 1, node.pos[2] })
+    if node.pos then
+      api.nvim_win_set_cursor(winid, { node.pos[1] + 1, node.pos[2] })
+    else
+      api.nvim_win_set_cursor(winid, { range.start.line + 1, range.start.character })
+    end
     local width = #api.nvim_get_current_line()
-    libs.jump_beacon({ node.range.start.line, node.range.start.character }, width)
+    libs.jump_beacon({ range.start.line, range.start.character }, width)
   end, opt)
 end
 
@@ -214,16 +220,17 @@ end
 
 function ot:expand_collapse()
   local curline = api.nvim_win_get_cursor(0)[1]
-  local idx, node = find_node(self.data, curline)
+  local node = find_node(self.data, curline)
   if not node then
     return
   end
   local prefix = get_hi_prefix()
   local kind = get_kind()
 
-  local function increase_or_reduce(pos, num)
+  local function increase_or_reduce(lnum, num)
     for k, v in pairs(self.data) do
-      if pos > k then
+      if v.winline > lnum then
+        self.data[k].winline = self.data[k].winline + num
         for _, item in pairs(v.data) do
           item.winline = item.winline + num
         end
@@ -250,7 +257,7 @@ function ot:expand_collapse()
       5,
       -1
     )
-    increase_or_reduce(idx, -#node.data)
+    increase_or_reduce(node.winline + #node.data, -#node.data)
     return
   end
 
@@ -281,7 +288,7 @@ function ot:expand_collapse()
     end
   end
 
-  increase_or_reduce(idx, #node.data)
+  increase_or_reduce(node.winline, #node.data)
 end
 
 function ot:auto_refresh()
@@ -321,25 +328,31 @@ end
 function ot:auto_preview()
   if self.preview_winid and api.nvim_win_is_valid(self.preview_winid) then
     api.nvim_win_close(self.preview_winid, true)
+    self.preview_winid = nil
+    self.preview_bufnr = nil
   end
 
   local curline = api.nvim_win_get_cursor(0)[1]
   local node
   for _, nodes in pairs(self.data) do
-    _, node = find_node(nodes.data, curline)
+    node = find_node(nodes.data, curline)
     if node then
       break
     end
   end
+  if not node then
+    return
+  end
 
-  if not node or not node.range then
+  local range = node.location and node.location.range or node.range
+  if not range then
     return
   end
 
   local content = api.nvim_buf_get_lines(
     self.render_buf,
-    node.range.start.line,
-    node.range['end'].line + config.preview.lines_below,
+    range.start.line,
+    range['end'].line + config.preview.lines_below,
     false
   )
 
@@ -382,13 +395,13 @@ function ot:auto_preview()
   local content_opts = {
     contents = content,
     buftype = 'nofile',
+    bufhidden = 'wipe',
     highlight = {
       normal = 'ActionPreviewNormal',
       border = 'ActionPreviewBorder',
     },
   }
 
-  local window = require('lspsaga.window')
   self.preview_bufnr, self.preview_winid = window.create_win_with_border(content_opts, opts)
   if fn.has('nvim-0.9') == 1 then
     local lang = require('nvim-treesitter.parsers').ft_to_lang(vim.bo[self.render_buf].filetype)
@@ -423,20 +436,23 @@ function ot:close_when_last()
 
       local both_nofile = {}
       for _, buf in pairs(bufs) do
-        if buf ~= self.bufnr and vim.bo[buf].buftype == 'nofile' then
+        if buf ~= self.bufnr and (vim.bo[buf].buftype == 'nofile' or #vim.bo[buf].buftype == 0) then
           table.insert(both_nofile, true)
         end
       end
 
-      if #both_nofile + 1 == #bufs or #wins == 1 then
+      if #both_nofile + 1 == #bufs then
         api.nvim_buf_delete(self.bufnr, { force = true })
       end
 
-      if #wins == 1 then
+      if #wins == 1 or (#wins == 2 and vim.tbl_contains(wins, self.preview_winid)) then
+        if api.nvim_win_is_valid(self.preview_winid) then
+          api.nvim_win_close(self.preview_winid, true)
+        end
         local bufnr = api.nvim_create_buf(true, true)
         api.nvim_win_set_buf(0, bufnr)
+        clean_ctx()
       end
-      clean_ctx()
     end,
     desc = 'Outline auto close when last one',
   })
@@ -454,7 +470,7 @@ function ot:render_outline(buf, symbols)
   local fname = libs.get_path_info(buf, 1)
   local data = libs.icon_from_devicon(vim.bo[buf].filetype)
   ---@diagnostic disable-next-line: need-check-nil
-  insert(lines, ' ' .. data[1] .. ' ' .. fname[1])
+  insert(lines, ' ' .. (data[1] or '') .. ' ' .. fname[1])
   local prefix = get_hi_prefix()
   local hi = {}
 
@@ -491,17 +507,17 @@ function ot:render_outline(buf, symbols)
     end
   end
   self:apply_map()
+  api.nvim_create_autocmd('WinClosed', {
+    callback = function(opt)
+      if api.nvim_get_current_win() == self.winid and opt.buf == self.bufnr then
+        clean_ctx()
+      end
+    end,
+    desc = '[lspsaga.nvim] clean the outline data after the win closed',
+  })
 end
 
 function ot:register_events()
-  api.nvim_create_autocmd('BufDelete', {
-    group = self.group,
-    buffer = self.bufnr,
-    callback = function()
-      clean_ctx()
-    end,
-  })
-
   if outline_conf.auto_close then
     self:close_when_last()
   end
@@ -524,11 +540,6 @@ end
 
 function ot:outline(no_close)
   no_close = no_close or false
-  if self.pending_request then
-    vim.notify('[lspsaga.nvim] there already have a request for outline please wait')
-    return
-  end
-
   if self.winid and api.nvim_win_is_valid(self.winid) and not no_close then
     api.nvim_win_close(self.winid, true)
     clean_ctx()
@@ -536,6 +547,15 @@ function ot:outline(no_close)
   end
 
   local current_buf = api.nvim_get_current_buf()
+  if #lsp.get_active_clients({ bufnr = current_buf }) == 0 then
+    vim.notify('[Lspsaga.nvim] there is no server attatched this buffer')
+    return
+  end
+  if self.pending_request then
+    vim.notify('[lspsaga.nvim] there already have a request for outline please wait')
+    return
+  end
+
   local symbols = get_cache_symbols(current_buf)
   self.group = api.nvim_create_augroup('LspsagaOutline', { clear = false })
   self.render_buf = current_buf

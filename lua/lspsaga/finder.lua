@@ -22,30 +22,24 @@ local function get_titles(index)
 end
 
 local function methods(index)
-  index = index or nil
   local t = {
     'textDocument/definition',
     'textDocument/implementation',
     'textDocument/references',
   }
 
-  if not index then
-    return t
-  end
-  return t[index]
+  return index and t[index] or t
 end
 
 local function supports_implement(buf)
-  local support = {}
+  local support = false
   for _, client in pairs(lsp.get_active_clients({ bufnr = buf })) do
-    if not client.supports_method(methods(2)) then
-      table.insert(support, false)
+    if client.supports_method('textDocument/implementation') then
+      support = true
+      break
     end
   end
-  if vim.tbl_contains(support, false) then
-    return false
-  end
-  return true
+  return support
 end
 
 function finder:lsp_finder()
@@ -53,6 +47,7 @@ function finder:lsp_finder()
   local pos = api.nvim_win_get_cursor(0)
   self.current_word = fn.expand('<cword>')
   self.main_buf = api.nvim_get_current_buf()
+  self.main_win = api.nvim_get_current_win()
   local from = { self.main_buf, pos[1], pos[2], 0 }
   local items = { { tagname = self.current_word, from = from } }
   fn.settagstack(api.nvim_get_current_win(), { items = items }, 't')
@@ -89,24 +84,16 @@ function finder:request_done()
 end
 
 function finder:loading_bar()
-  -- calculate our floating window size
-  local win_height = math.ceil(vim.o.lines * 0.6)
-  local win_width = math.ceil(vim.o.columns * 0.8)
-
-  -- and its starting position
-  local row = math.ceil((vim.o.lines - win_height) / 2 - 1)
-  local col = math.ceil(vim.o.columns - win_width)
-
   local opts = {
-    relative = 'editor',
+    relative = 'cursor',
     height = 2,
     width = 20,
-    row = row,
-    col = col,
   }
 
   local content_opts = {
     contents = {},
+    buftype = 'nofile',
+    border = 'solid',
     highlight = {
       normal = 'finderNormal',
       border = 'finderBorder',
@@ -215,8 +202,8 @@ end
 
 function finder:render_finder()
   self.root_dir = libs.get_lsp_root_dir()
-  self.contents = {}
   self.short_link = {}
+  self.contents = {}
 
   local lnum, start_lnum = 0, 0
 
@@ -237,9 +224,13 @@ function finder:render_finder()
   end
 
   ---@diagnostic disable-next-line: param-type-mismatch
-  for _, method in pairs(methods()) do
+  for i, method in pairs(methods()) do
+    if i == 2 and #self.request_result[method] == 0 then
+      goto skip
+    end
     local tbl = self:create_finder_contents(self.request_result[method], method)
     generate_contents(tbl, method)
+    ::skip::
   end
   self:render_finder_result()
 end
@@ -255,9 +246,6 @@ local function get_msg(method)
 end
 
 function finder:create_finder_contents(result, method)
-  if (not result or vim.tbl_isempty(result)) and method == methods(2) then
-    return
-  end
   self:get_file_icon()
 
   local contents = {}
@@ -269,6 +257,10 @@ function finder:create_finder_contents(result, method)
   if #result == 0 then
     insert(contents, { self.indent .. self.f_icon .. get_msg(method), false })
     insert(contents, { ' ', false })
+    self.short_link[#contents - 1] = {
+      preview = { 'Sorry not result found' },
+      link = api.nvim_buf_get_name(self.main_buf),
+    }
     return contents
   end
 
@@ -294,7 +286,7 @@ function finder:create_finder_contents(result, method)
     local path_sep = libs.path_sep
     -- reduce filename length by root_dir or home dir
     if self.root_dir and link:find(self.root_dir, 1, true) then
-      short_name = link:sub(self.root_dir:len() + 2)
+      short_name = link:sub(self.root_dir:len() + #libs.path_sep)
     else
       local _split = vim.split(link, path_sep)
       if #_split >= 4 then
@@ -332,52 +324,56 @@ function finder:render_finder_result()
   if next(self.contents) == nil then
     return
   end
-  -- get dimensions
-  local width = api.nvim_get_option('columns')
-  local height = api.nvim_get_option('lines')
 
-  -- calculate our floating window size
-  local win_height = math.ceil(height * 0.8)
-  local win_width = math.ceil(width * 0.8)
+  self.request_result = nil
+  self.request_status = nil
 
-  -- and its starting position
-  local row = math.ceil((height - win_height) * 0.7)
-  local col = math.ceil((width - win_width))
-  local opts = {
-    style = 'minimal',
-    relative = 'editor',
-    row = row,
-    col = col,
+  local opt = {
+    relative = 'win',
+    width = window.get_max_content_length(self.contents),
   }
 
-  local max_height = math.ceil((height - 4) * 0.5)
-  if #self.contents > max_height then
-    opts.height = max_height
+  local max_height = math.floor(vim.o.lines * 0.5)
+  opt.height = #self.contents > max_height and max_height or #self.contents
+  if opt.height <= 0 or not opt.height then
+    opt.height = max_height
   end
 
+  local winline = fn.winline()
+  if vim.o.lines - 6 - opt.height - winline <= 0 then
+    vim.cmd('normal! zz')
+    local keycode = api.nvim_replace_termcodes('6<C-e>', true, false, true)
+    api.nvim_feedkeys(keycode, 'x', false)
+  end
+  winline = fn.winline()
+  opt.row = winline + 2
+  opt.col = 10
+
+  local side_char = window.border_chars()['top'][config.ui.border]
   local content_opts = {
     contents = self.contents,
     filetype = 'lspsagafinder',
     enter = true,
+    border_side = {
+      ['right'] = ' ',
+      ['righttop'] = side_char,
+      ['rightbottom'] = side_char,
+    },
     highlight = {
       border = 'finderBorder',
       normal = 'finderNormal',
     },
   }
 
-  if fn.has('nvim-0.9') == 1 then
-    local theme = require('lspsaga').theme()
-    opts.title = {
-      { theme.left, 'TitleSymbol' },
-      { ' ', 'TitleIcon' },
+  if fn.has('nvim-0.9') == 1 and config.ui.title then
+    opt.title = {
+      { ' ', 'TitleIcon' },
       { self.current_word, 'TitleString' },
-      { theme.right, 'TitleSymbol' },
     }
   end
 
-  self.bufnr, self.winid = window.create_win_with_border(content_opts, opts)
+  self.bufnr, self.winid = window.create_win_with_border(content_opts, opt)
   api.nvim_buf_set_option(self.bufnr, 'buflisted', false)
-  api.nvim_win_set_var(self.winid, 'lsp_finder_win_opts', opts)
   api.nvim_win_set_option(self.winid, 'cursorline', false)
 
   self:set_cursor()
@@ -529,19 +525,11 @@ end
 
 function finder:lsp_finder_highlight()
   local len = string.len('Definition')
-  local theme = require('lspsaga').theme()
 
   for _, v in pairs({ 0, self.ref_scope[1], self.imp_scope and self.imp_scope[1] or nil }) do
-    api.nvim_buf_add_highlight(self.bufnr, -1, 'finderIcon', v, 0, 3)
-    api.nvim_buf_add_highlight(self.bufnr, -1, 'finderType', v, 4, 4 + len)
-    api.nvim_buf_add_highlight(
-      self.bufnr,
-      -1,
-      'finderCount',
-      v,
-      #theme.left + len + #theme.right,
-      -1
-    )
+    api.nvim_buf_add_highlight(self.bufnr, -1, 'FinderIcon', v, 0, 3)
+    api.nvim_buf_add_highlight(self.bufnr, -1, 'FinderType', v, 4, 4 + len)
+    api.nvim_buf_add_highlight(self.bufnr, -1, 'FinderCount', v, 4 + len, -1)
   end
 end
 
@@ -592,6 +580,10 @@ function finder:set_cursor()
 end
 
 function finder:auto_open_preview()
+  if self.preview_winid and api.nvim_win_is_valid(self.preview_winid) then
+    api.nvim_win_close(self.preview_winid, true)
+  end
+
   local current_line = fn.line('.')
   if not self.short_link[current_line] then
     return
@@ -612,74 +604,46 @@ function finder:auto_open_preview()
   local _end_col = self.short_link[current_line]._end_col
 
   if next(content) ~= nil then
-    local has_var, finder_win_opts = pcall(api.nvim_win_get_var, 0, 'lsp_finder_win_opts')
-    if not has_var then
-      vim.notify('get finder window options wrong')
-      return
-    end
     local opts = {
-      relative = 'editor',
+      relative = 'win',
+      win = self.main_win,
       -- We'll make sure the preview window is the correct size
       no_size_override = true,
     }
 
-    local finder_width = fn.winwidth(0)
-    local finder_height = fn.winheight(0)
-    local screen_width = api.nvim_get_option('columns')
+    local winconfig = api.nvim_win_get_config(self.winid)
+    opts.col = winconfig.col[false] + winconfig.width + 2
+    opts.row = winconfig.row[false]
+    opts.height = winconfig.height
+    local max_width = vim.o.columns - opts.col - 4
+    local max_len = window.get_max_content_length(content)
+    opts.width = max_width > max_len and max_len or max_width
 
-    local content_width = 0
-    for _, line in ipairs(content) do
-      content_width = math.max(fn.strdisplaywidth(line), content_width)
-    end
-
-    local border_width
-    if config.border_style == 'double' then
-      border_width = 4
-    else
-      border_width = 2
-    end
-
-    local max_width = screen_width - finder_win_opts.col - finder_width - border_width - 2
-
-    if max_width > 42 then
-      -- Put preview window to the right of the finder window
-      local preview_width = math.min(content_width + border_width, max_width)
-      opts.col = finder_win_opts.col + finder_width + 2
-      opts.row = finder_win_opts.row
-      opts.width = preview_width
-      opts.height = #self.contents
-      if opts.height > finder_height then
-        opts.height = finder_height
-      end
-    else
-      -- Put preview window below the finder window
-      local max_height = vim.o.lines - finder_win_opts.row - finder_height - border_width - 2
-      if max_height <= 3 then
-        return
-      end -- Don't show preview window if too short
-      opts.row = finder_win_opts.row + finder_height + 4
-      opts.col = finder_win_opts.col
-      opts.width = finder_width
-      opts.height = math.min(8, max_height)
-    end
-
+    local rtop = window.combine_char()['righttop'][config.ui.border]
+    local rbottom = window.combine_char()['rightbottom'][config.ui.border]
     local content_opts = {
       contents = content,
       buftype = 'nofile',
+      border_side = {
+        ['lefttop'] = rtop,
+        ['leftbottom'] = rbottom,
+      },
       highlight = {
         border = 'finderPreviewBorder',
         normal = 'finderNormal',
       },
     }
 
-    if fn.has('nvim-0.9') == 1 then
-      local theme = require('lspsaga').theme()
+    if fn.has('nvim-0.9') == 1 and config.ui.title then
+      local path =
+        vim.split(self.short_link[current_line].link, libs.path_sep, { trimempty = true })
       opts.title = {
-        { theme.left, 'TitleSymbol' },
-        { config.ui.preview, 'TitleIcon' },
-        { 'Preview', 'TitleString' },
-        { theme.right, 'TitleSymbol' },
+        { path[#path], 'TitleString' },
       }
+      local icon_data = libs.icon_from_devicon(vim.bo[self.main_buf].filetype)
+      if #icon_data > 0 then
+        table.insert(opts.title, 1, { icon_data[1] .. ' ', icon_data[2] })
+      end
     end
 
     self:close_auto_preview_win()
@@ -704,6 +668,11 @@ function finder:auto_open_preview()
           break
         end
       end
+
+      if not start_pos then
+        return
+      end
+
       if 0 + config.preview.lines_above - trimLines >= 0 then
         api.nvim_buf_add_highlight(
           self.preview_bufnr,
@@ -736,7 +705,7 @@ end
 function finder:open_link(action)
   local current_line = api.nvim_win_get_cursor(0)[1]
 
-  if self.short_link[current_line] == nil then
+  if not self.short_link[current_line] then
     vim.notify('[LspSaga] no file link in current line', vim.log.levels.WARN)
     return
   end
@@ -749,7 +718,7 @@ function finder:open_link(action)
     vim.cmd('write')
   end
   vim.cmd(action .. ' ' .. uv.fs_realpath(short_link[current_line].link))
-  api.nvim_win_set_cursor(0, { short_link[current_line].row, short_link[current_line].col })
+  api.nvim_win_set_cursor(0, { short_link[current_line].row, short_link[current_line].col - 1 })
   local width = #api.nvim_get_current_line()
   libs.jump_beacon({ short_link[current_line].row - 1, 0 }, width)
   self:clear_tmp_data()

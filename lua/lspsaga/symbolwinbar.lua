@@ -1,5 +1,6 @@
 local lsp, api, fn = vim.lsp, vim.api, vim.fn
 local config = require('lspsaga').config.symbol_in_winbar
+local libs = require('lspsaga.libs')
 local symbar = {}
 
 local cache = {}
@@ -17,64 +18,83 @@ local function bar_prefix()
 end
 
 local function get_kind_icon(type, index)
-  local kind = require('lspsaga.highlight').get_kind()
+  local kind = require('lspsaga.lspkind').get_kind()
   ---@diagnostic disable-next-line: need-check-nil
   return kind[type][index]
 end
 
-local function bar_file_name(buf)
-  local libs = require('lspsaga.libs')
-  local res = libs.get_path_info(buf, config.folder_level)
-  if not res then
+local function respect_lsp_root(buf)
+  local clients = lsp.get_active_clients({ bufnr = buf })
+  if #clients == 0 then
     return
   end
-  local data = libs.icon_from_devicon(vim.bo[buf].filetype)
-  if #res == 0 then
-    return ''
+  local root_dir = clients[1].config.root_dir
+  local bufname = api.nvim_buf_get_name(buf)
+  local bufname_parts = vim.split(bufname, libs.path_sep, { trimempty = true })
+  if not root_dir then
+    return { unpack(bufname_parts, config.folder_level - 1) }
   end
-  local str = ''
-  local f_icon = data and data[1] and data[1] .. ' ' or ''
-  local f_hl = data and data[2] and data[2] or ''
-  local bar = bar_prefix()
-  for i, v in pairs(res) do
-    local tmp
-    if i == #res then
-      tmp = '%#' .. f_hl .. '#' .. f_icon .. '%*' .. bar.prefix .. 'File#' .. v .. '%*'
-    else
-      tmp = bar.prefix
-        .. 'Folder#'
-        .. get_kind_icon(302, 2)
-        .. '%*'
-        .. bar.prefix
-        .. 'FolderLevel'
-        .. i
-        .. '#'
-        .. v
-        .. '%*'
-        .. bar.sep
-    end
-    str = str .. tmp
-  end
-  return str
+  local parts = vim.split(root_dir, libs.path_sep, { trimempty = true })
+  return { unpack(bufname_parts, #parts + 1) }
 end
 
----@private
-local do_symbol_request = function(buf, callback)
-  buf = buf or api.nvim_get_current_buf()
-  local params = { textDocument = lsp.util.make_text_document_params() }
+local function bar_file_name(buf)
+  local res
+  if config.respect_root then
+    res = respect_lsp_root(buf)
+  end
 
-  local libs = require('lspsaga.libs')
-  local client = libs.get_client_by_cap('documentSymbolProvider')
-  if client == nil then
+  --fallback to config.folder_level
+  if not res then
+    res = libs.get_path_info(buf, config.folder_level)
+  end
+
+  if not res or #res == 0 then
     return
   end
-  cache[buf].pending_request = true
-  client.request('textDocument/documentSymbol', params, callback, buf)
+  local data = libs.icon_from_devicon(vim.bo[buf].filetype, true)
+  local bar = bar_prefix()
+  local items = {}
+  for i, v in pairs(res) do
+    if i == #res then
+      if #data > 0 then
+        table.insert(items, '%#LspSagaWinbarFileIcon#' .. data[1] .. ' ' .. '%*')
+
+        local ok, conf = pcall(api.nvim_get_hl_by_name, 'LspSagaWinbarFileIcon', true)
+        if not ok then
+          conf = {}
+        end
+        api.nvim_set_hl(
+          0,
+          'LspSagaWinbarFileIcon',
+          vim.tbl_extend('force', conf, {
+            foreground = data[2],
+          })
+        )
+      end
+      table.insert(items, bar.prefix .. 'File#' .. v .. '%*')
+    else
+      table.insert(
+        items,
+        bar.prefix
+          .. 'Folder#'
+          .. get_kind_icon(302, 2)
+          .. '%*'
+          .. bar.prefix
+          .. 'FolderName'
+          .. '#'
+          .. v
+          .. '%*'
+          .. bar.sep
+      )
+    end
+  end
+  return table.concat(items, '')
 end
 
 local function get_node_range(node)
-  if node.localtion then
-    return node.localtion.range
+  if node.location then
+    return node.location.range
   end
 
   if node.range then
@@ -141,8 +161,20 @@ local function insert_elements(buf, node, elements)
   local type = get_kind_icon(node.kind, 1)
   local icon = get_kind_icon(node.kind, 2)
   local bar = bar_prefix()
-  local node_context = bar.prefix .. type .. '#' .. icon .. node.name
-  table.insert(elements, node_context)
+  if config.color_mode then
+    local node_context = bar.prefix .. type .. '#' .. icon .. node.name
+    table.insert(elements, node_context)
+  else
+    local node_context = bar.prefix
+      .. type
+      .. '#'
+      .. icon
+      .. bar.prefix
+      .. 'Word'
+      .. '#'
+      .. node.name
+    table.insert(elements, node_context)
+  end
 end
 
 --@private
@@ -178,18 +210,17 @@ end
 
 --@private
 local render_symbol_winbar = function(buf, symbols)
-  buf = buf or api.nvim_get_current_buf()
+  local cur_buf = api.nvim_get_current_buf()
+  if cur_buf ~= buf then
+    return
+  end
+
   local all_wins = fn.win_findbuf(buf)
   local cur_win = api.nvim_get_current_win()
   if not vim.tbl_contains(all_wins, cur_win) then
     return
   end
 
-  local ok, val = pcall(api.nvim_win_get_var, cur_win, 'disable_winbar')
-  if ok and val then
-    vim.wo[cur_win].winbar = ''
-    return
-  end
   local current_line = api.nvim_win_get_cursor(cur_win)[1]
   local winbar_str = config.show_file and bar_file_name(buf) or ''
 
@@ -223,7 +254,12 @@ local render_symbol_winbar = function(buf, symbols)
   winbar_str = winbar_str .. str
 
   if config.enable and api.nvim_win_get_height(cur_win) - 1 > 1 then
-    vim.wo[cur_win].winbar = winbar_str
+    if #winbar_str == 0 then
+      winbar_str = bar_prefix().prefix .. ' #'
+    end
+    --TODO: some string has invalidate character handle this string
+    --ref: neovim/filetype/detect.lua scroll in 1588 line
+    api.nvim_set_option_value('winbar', winbar_str, { scope = 'local', win = cur_win })
   end
   return winbar_str
 end
@@ -248,10 +284,24 @@ local function get_buf_symbol(buf)
   return res
 end
 
-function symbar:refresh_symbol_cache(buf, render_fn)
+function symbar:do_symbol_request(buf, callback)
+  local params = { textDocument = lsp.util.make_text_document_params() }
+
+  local client = libs.get_client_by_cap('documentSymbolProvider')
+  if not client then
+    return
+  end
   self[buf].pending_request = true
-  local function callback_fn(_, result, _)
-    self[buf].pending_request = false
+  client.request('textDocument/documentSymbol', params, callback, buf)
+end
+
+function symbar:refresh_symbol_cache(buf, render_fn)
+  local function handler(_, result, ctx)
+    if api.nvim_get_current_buf() ~= buf or not self[ctx.bufnr] then
+      return
+    end
+
+    self[ctx.bufnr].pending_request = false
     if not result then
       return
     end
@@ -260,22 +310,18 @@ function symbar:refresh_symbol_cache(buf, render_fn)
       render_fn(buf, result)
     end
 
-    self[buf].symbols = result
+    self[ctx.bufnr].symbols = result
   end
-  do_symbol_request(buf, callback_fn)
+  self:do_symbol_request(buf, handler)
 end
 
 function symbar:init_buf_symbols(buf, render_fn)
-  if not self[buf] then
-    self[buf] = {}
-  end
-
   local res = get_buf_symbol(buf)
   if res.pending_request then
     return
   end
 
-  if not res.symbols then
+  if not res.symbols or (next(res.symbols) == nil and not res.pending_request) then
     self:refresh_symbol_cache(buf, render_fn)
   else
     render_fn(buf, res.symbols)
@@ -299,10 +345,10 @@ function symbar:register_events(buf)
   api.nvim_create_autocmd('CursorMoved', {
     group = augroup,
     buffer = buf,
-    callback = function(opt)
-      self:init_buf_symbols(opt.buf, render_symbol_winbar)
+    callback = function()
+      self:init_buf_symbols(buf, render_symbol_winbar)
     end,
-    desc = 'Lspsaga symbols',
+    desc = 'Lspsaga symbols render and request',
   })
 
   api.nvim_create_autocmd({ 'TextChanged', 'InsertLeave' }, {
@@ -330,19 +376,38 @@ end
 
 function symbar:symbol_autocmd()
   api.nvim_create_autocmd('LspAttach', {
-    group = api.nvim_create_augroup('LspsagaSymbols', {}),
+    group = api.nvim_create_augroup('LspsagaSymbols', { clear = false }),
     callback = function(opt)
       if vim.bo[opt.buf].buftype == 'nofile' then
         return
       end
 
       local winid = api.nvim_get_current_win()
-      local ok, val = pcall(api.nvim_win_get_var, winid, 'disable_winbar')
-      if ok and val then
+      if api.nvim_get_current_buf() ~= opt.buf then
         return
       end
+
+      local ok, _ = pcall(api.nvim_win_get_var, winid, 'disable_winbar')
+      if ok then
+        return
+      end
+
       if config.show_file then
-        vim.wo[winid].winbar = bar_file_name(opt.buf)
+        api.nvim_set_option_value(
+          'winbar',
+          bar_file_name(opt.buf),
+          { scope = 'local', win = winid }
+        )
+      else
+        api.nvim_set_option_value(
+          'winbar',
+          bar_prefix().prefix .. ' #',
+          { scope = 'local', win = winid }
+        )
+      end
+
+      if not self[opt.buf] then
+        self[opt.buf] = {}
       end
 
       self:init_buf_symbols(opt.buf, render_symbol_winbar)

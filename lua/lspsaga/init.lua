@@ -4,28 +4,26 @@ saga.saga_augroup = api.nvim_create_augroup('Lspsaga', { clear = true })
 
 local default_config = {
   ui = {
-    theme = 'round',
-    border = 'solid',
+    border = 'single',
+    title = true,
     winblend = 0,
     expand = '',
     collapse = '',
-    preview = ' ',
     code_action = '💡',
     diagnostic = '🐞',
     incoming = ' ',
     outgoing = ' ',
-    colors = {
-      --float window normal bakcground color
-      normal_bg = '#1d1536',
-      --title background color
-      title_bg = '#afd700',
-    },
+    hover = ' ',
     kind = {},
   },
   diagnostic = {
-    twice_into = false,
     show_code_action = true,
     show_source = true,
+    jump_num_shortcut = true,
+    max_width = 0.7,
+    custom_fix = nil,
+    custom_msg = nil,
+    text_hl_follow = false,
     keys = {
       exec_action = 'o',
       quit = 'q',
@@ -57,6 +55,7 @@ local default_config = {
   },
   request_timeout = 2000,
   finder = {
+    jump_to = 'p',
     edit = { 'o', '<CR>' },
     vsplit = 's',
     split = 'i',
@@ -74,6 +73,8 @@ local default_config = {
   rename = {
     quit = '<C-c>',
     exec = '<CR>',
+    mark = 'x',
+    confirm = '<CR>',
     in_select = true,
   },
   symbol_in_winbar = {
@@ -82,6 +83,8 @@ local default_config = {
     hide_keyword = true,
     show_file = true,
     folder_level = 2,
+    respect_root = false,
+    color_mode = true,
   },
   outline = {
     win_position = 'right',
@@ -110,39 +113,26 @@ local default_config = {
       expand_collapse = 'u',
     },
   },
+  beacon = {
+    enable = true,
+    frequency = 7,
+  },
   server_filetype_map = {},
 }
 
-function saga.theme()
-  local theme = {
-    ['round'] = {
-      left = '',
-      right = '',
-    },
-  }
-
-  return theme[saga.config.ui.theme]
-end
-
 function saga.setup(opts)
+  opts = opts or {}
   saga.config = vim.tbl_deep_extend('force', default_config, opts)
 
   require('lspsaga.highlight'):init_highlight()
+  require('lspsaga.lspkind').init_kind_hl()
   if saga.config.lightbulb.enable then
     require('lspsaga.lightbulb').lb_autocmd()
   end
 
-  if saga.config.symbol_in_winbar.enable or saga.config.symbol_in_winbar.in_custom then
+  if saga.config.symbol_in_winbar.enable then
     require('lspsaga.symbolwinbar'):symbol_autocmd()
   end
-end
-
----@deprecated
-function saga.init_lsp_saga()
-  vim.notify(
-    'lspsaga.nvim v0.2.3+ has braking changes. Please read the docs and migrate your configuration to the new "setup" function!',
-    vim.log.levels.ERROR
-  )
 end
 
 return saga
